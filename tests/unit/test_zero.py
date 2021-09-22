@@ -133,6 +133,7 @@ def test_zero3_repeat_forward_loop(tmpdir, zero_stage):
 
 
 # testing the fix https://github.com/microsoft/DeepSpeed/pull/1227
+# also reproduces the https://github.com/microsoft/DeepSpeed/pull/1372
 @pytest.mark.parametrize('zero_stage', [2, 3])
 def test_zero_to_fp32(tmpdir, zero_stage):
 
@@ -165,9 +166,15 @@ def test_zero_to_fp32(tmpdir, zero_stage):
         class MyModel(torch.nn.Module):
             def __init__(self, hidden_dim, n_layers):
                 super().__init__()
+                # to reproduce https://github.com/microsoft/DeepSpeed/pull/1372 it is important that
+                # the number of total elements is uneven:
+                # (1) 4 layers of 3*(3+1)=12 elements each, 48 in total
                 self.ll = torch.nn.ModuleList(
                     torch.nn.Linear(hidden_dim,
                                     hidden_dim) for i in range(n_layers))
+                # (2) the following adds 4+1=5 elements
+                self.classifier = torch.nn.Linear(4, 1)
+                # total 48+5=53 (uneven as desired) elements
                 self.cross_entropy_loss = torch.nn.CrossEntropyLoss()
 
             def forward(self, x, y):
@@ -177,7 +184,7 @@ def test_zero_to_fp32(tmpdir, zero_stage):
                 return self.cross_entropy_loss(hidden, y)
 
         args = args_from_dict(tmpdir, config_dict)
-        hidden_dim = 2
+        hidden_dim = 3  # do not change
 
         world_size = dist.get_world_size()
         # we want at least 2x layers as there are gpus to trigger round_robin_fp16_groups reshuffle in zero2
@@ -221,13 +228,102 @@ def test_zero_to_fp32(tmpdir, zero_stage):
             orig_state_dict[name] = param.detach().cpu()
         print(orig_state_dict)
 
-        fp32_model = load_state_dict_from_zero_checkpoint(model.module, tmpdir)
-        #dump_state_dict(fp32_model)
+        if dist.get_rank() == 0:
+            fp32_model = load_state_dict_from_zero_checkpoint(model.module, tmpdir)
+            #dump_state_dict(fp32_model)
 
-        fp32_state_dict = fp32_model.state_dict()
-        for name in orig_state_dict.keys():
-            # float() workaround for torch<1.6
-            assert torch.allclose(orig_state_dict[name].float(),
-                                  fp32_state_dict[name].float())
+            fp32_state_dict = fp32_model.state_dict()
+            for name in orig_state_dict.keys():
+                # float() workaround for torch<1.6
+                assert torch.allclose(orig_state_dict[name].float(),
+                                      fp32_state_dict[name].float())
 
     _test_zero_to_fp32()
+
+
+@pytest.mark.parametrize('zero_stage, allgather_bucket_size', [(2, 1000), (2, 1001)])
+def test_incorrect_allgather_bucket_size(tmpdir, zero_stage, allgather_bucket_size):
+    config_dict = {
+        "train_micro_batch_size_per_gpu": 2,
+        "gradient_accumulation_steps": 2,
+        "steps_per_print": 1,
+        "zero_optimization": {
+            "stage": zero_stage,
+            "allgather_bucket_size": allgather_bucket_size
+        },
+        "optimizer": {
+            "type": "Adam",
+            "params": {
+                "lr": 1e-3
+            }
+        },
+        "fp16": {
+            "enabled": True,
+            "initial_scale_power": 8
+        }
+    }
+
+    args = args_from_dict(tmpdir, config_dict)
+    hidden_dim = 4
+
+    model = SimpleModel(hidden_dim=hidden_dim)
+
+    @distributed_test(world_size=[1])
+    def _test_incorrect_allgather_bucket_size(args, model, hidden_dim):
+        if allgather_bucket_size % 2 == 0:
+            model, _, _, _ = deepspeed.initialize(args=args,
+                                              model=model,
+                                              model_parameters=model.parameters())
+        else:
+            with pytest.raises(AssertionError) as assertinfo:
+                model, _, _, _ = deepspeed.initialize(args=args,
+                                                  model=model,
+                                                  model_parameters=model.parameters())
+            assert "allgather_bucket_size must be a multiple of nccl_start_alignment_factor" in str(
+                assertinfo)
+
+    _test_incorrect_allgather_bucket_size(args=args, model=model, hidden_dim=hidden_dim)
+
+
+@pytest.mark.parametrize('zero_stage, world_size', [(2, 2), (2, 3), (2, 4)])
+def test_partition_nccl_alignment(tmpdir, zero_stage, world_size):
+    config_dict = {
+        "train_micro_batch_size_per_gpu": 2,
+        "gradient_accumulation_steps": 2,
+        "steps_per_print": 1,
+        "zero_optimization": {
+            "stage": zero_stage
+        },
+        "optimizer": {
+            "type": "Adam",
+            "params": {
+                "lr": 1e-3
+            }
+        },
+        "fp16": {
+            "enabled": True,
+            "initial_scale_power": 8
+        }
+    }
+
+    args = args_from_dict(tmpdir, config_dict)
+    hidden_dim = 4
+
+    model = SimpleModel(hidden_dim=hidden_dim)
+
+    @distributed_test(world_size=world_size)
+    def _test_partition_nccl_alignment(args, model, hidden_dim):
+        model, _, _, _ = deepspeed.initialize(args=args,
+                                              model=model,
+                                              model_parameters=model.parameters())
+
+        # get nccl all-gather send buffers alignment factor
+        nccl_start_alignment_factor = model.optimizer.nccl_start_alignment_factor
+
+        for data_parallel_partitions in model.optimizer.parallel_partitioned_fp16_groups:
+            for partition_id, partitioned_data in enumerate(data_parallel_partitions):
+                # verify that data partition start locations are 4-byte aligned
+                assert (partitioned_data.data_ptr() %
+                        (2 * nccl_start_alignment_factor) == 0)
+
+    _test_partition_nccl_alignment(args=args, model=model, hidden_dim=hidden_dim)
