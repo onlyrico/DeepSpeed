@@ -1,10 +1,17 @@
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSpeed Team
+
 import torch
 from deepspeed.utils import log_dist
 import numpy as np
 import logging
+from deepspeed.utils.torch import required_torch_version
 
 
 class Eigenvalue(object):
+
     def __init__(self,
                  verbose=False,
                  max_iter=100,
@@ -30,12 +37,15 @@ class Eigenvalue(object):
             ranks=[0])
 
     # Replace all nan/pos-inf/neg-inf to zero
-    # TODO: Pytorch new verion may add this function, replace this one by then.
     def nan_to_num(self, x):
-        device = x.device
-        x = x.cpu().numpy()
-        x = np.nan_to_num(x=x, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-        return torch.from_numpy(x).to(device)
+        if required_torch_version(min_version=1.8):
+            return torch.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0)
+        else:
+            # Fallback to numpy based implementation for backwards-compatibility with PyTorch 1.7 or older versions.
+            device = x.device
+            x = x.cpu().numpy()
+            x = np.nan_to_num(x=x, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            return torch.from_numpy(x).to(device)
 
     def normalize(self, v):
         norm_squared = self.inner_product(v, v)
@@ -75,8 +85,7 @@ class Eigenvalue(object):
                 ]
             else:
                 v = [
-                    torch.randn(p.size(),
-                                device=device) for p in model_block.parameters()
+                    torch.randn(p.size(), device=device) for p in model_block.parameters()
                     if p.grad is not None and p.grad.grad_fn is not None
                 ]
             torch.random.set_rng_state(rng_state)
@@ -98,24 +107,18 @@ class Eigenvalue(object):
             # Disable eigenvalue if the model doesn't support second order gradients computation,
             # e.g. when enabling DS transformer kernel.
             if len(grads) == 0 or len(params) == 0:
-                log_dist(f'The model does NOT support eigenvalue computation.',
-                         ranks=[0],
-                         level=logging.WARNING)
+                log_dist(f'The model does NOT support eigenvalue computation.', ranks=[0], level=logging.WARNING)
                 return []
 
             i = 0
             eigenvalue_current, eigenvalue_previous = 1., 0.
 
             while (i < self.max_iter) and abs(eigenvalue_current) > 0 and (abs(
-                (eigenvalue_current - eigenvalue_previous) /
-                    eigenvalue_current) >= self.tol):  # test convergence criteria
+                (eigenvalue_current - eigenvalue_previous) / eigenvalue_current)
+                                                                           >= self.tol):  # test convergence criteria
                 eigenvalue_previous = eigenvalue_current
 
-                Hv = torch.autograd.grad(grads,
-                                         params,
-                                         grad_outputs=v,
-                                         only_inputs=True,
-                                         retain_graph=True)
+                Hv = torch.autograd.grad(grads, params, grad_outputs=v, only_inputs=True, retain_graph=True)
                 #Hv = [hv.float() for hv in Hv]
                 Hv = [self.nan_to_num(hv).float() for hv in Hv]
 
@@ -129,9 +132,7 @@ class Eigenvalue(object):
             block_eigenvalue.append(eigenvalue_current)
 
             if self.verbose:
-                log_dist(
-                    f'block: {block}, power iteration: {i}, eigenvalue: {eigenvalue_current}',
-                    ranks=[0])
+                log_dist(f'block: {block}, power iteration: {i}, eigenvalue: {eigenvalue_current}', ranks=[0])
 
         block_eigenvalue = self.post_process(block_eigenvalue)
 

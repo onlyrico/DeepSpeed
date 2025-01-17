@@ -1,14 +1,16 @@
-/*
-Copyright 2020 The Microsoft DeepSpeed Team
-Licensed under the MIT license.
+// Copyright (c) Microsoft Corporation.
+// SPDX-License-Identifier: Apache-2.0
 
-Functionality for swapping optimizer tensors to/from (NVMe) storage devices.
+// DeepSpeed Team
+
+/*
+Functionality for swapping tensors to/from (NVMe) storage devices.
 */
 
 #include "deepspeed_py_copy.h"
 #include <omp.h>
 
-#define ROUND_DOWN(size, step) ((size) & ~((step)-1))
+#define ROUND_DOWN(size, step) ((size) & ~((step) - 1))
 
 #if defined(__AVX512__) or defined(__AVX256__)
 union AVX_Data {

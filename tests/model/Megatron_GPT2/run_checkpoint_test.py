@@ -1,13 +1,16 @@
-# coding=utf-8
-# Copyright (c) 2019, The Microsoft DeepSpeed Team. All rights reserved.
-#
-# Note: please copy webtext data to "Megatron-LM" folder, before running this script.
+# Copyright (c) Microsoft Corporation.
+# SPDX-License-Identifier: Apache-2.0
+
+# DeepSpeed Team
+"""
+Note: please copy webtext data to "Megatron-LM" folder, before running this script.
+"""
 
 import unittest
 import subprocess
 import os
-import time
 import re
+import shlex
 from .test_common import BaseTestCase
 
 LAYERS = 2
@@ -16,9 +19,9 @@ ATTN_HEADS = 8
 
 
 def remove_file(test_id, filename):
-    cmd = f"if [ -f {filename} ] ; then rm -v {filename}; fi"
+    cmd = shlex.split(f"if [ -f {filename} ] ; then rm -v {filename}; fi")
     print(f"{test_id} cmd: {cmd}")
-    subprocess.run(cmd, shell=True, check=False, executable='/bin/bash')
+    subprocess.run(cmd, check=False, executable='/bin/bash')
 
 
 def grep_loss_from_file(file_name):
@@ -27,7 +30,7 @@ def grep_loss_from_file(file_name):
     with open(file_name, 'r') as f:
         lines = f.readlines()
         line_filter = "validation loss at the end of training for test data | LM loss:"
-        match_number = re.compile('LM loss: ([-+]?[0-9]+\.?[0-9]*(?:[Ee][-+]?[0-9]+)?)')
+        match_number = re.compile(r'LM loss: ([-+]?[0-9]+\.?[0-9]*(?:[Ee][-+]?[0-9]+)?)')
 
         for line in lines:
             if line_filter in line:
@@ -41,6 +44,7 @@ def grep_loss_from_file(file_name):
 
 
 class GPT2CheckpointTestCase(BaseTestCase):
+
     def __init__(self, methodName="DeepSpeed function test on GPT2 model"):
         super(GPT2CheckpointTestCase, self).__init__(methodName)
 
@@ -448,9 +452,9 @@ class GPT2CheckpointTestCase(BaseTestCase):
         checkpoint_name = test_config["checkpoint_name"]
         #---------------remove old checkpoint---------------#
         try:
-            cmd = f"rm -rf {checkpoint_name}"
+            cmd = shlex.split(f"rm -rf {checkpoint_name}")
             print(f"{self.id()} cmd: {cmd}")
-            subprocess.run(cmd, shell=True, check=False, executable='/bin/bash')
+            subprocess.run(cmd, check=False, executable='/bin/bash')
         except:
             print("No old checkpoint")
 
@@ -471,8 +475,8 @@ class GPT2CheckpointTestCase(BaseTestCase):
 
         # remove previous test log
         try:
-            cmd = f"rm {base_file}"
-            subprocess.run(cmd, shell=True, check=False, executable='/bin/bash')
+            cmd = shlex.split(f"rm {base_file}")
+            subprocess.run(cmd, check=False, executable='/bin/bash')
         except:
             print(f"{self.id()} No old logs")
 
@@ -482,14 +486,13 @@ class GPT2CheckpointTestCase(BaseTestCase):
         #-----------------Loading Checkpoint-----------------#
 
         # building checkpoint arguments
-        test_config[
-            "other_args"] = f"\"--load {checkpoint_folder} {cpu_optimizer_flag} \""
+        test_config["other_args"] = f"\"--load {checkpoint_folder} {cpu_optimizer_flag} \""
 
         # set checkpoint load iteration
         try:
-            cmd = f"echo {checkpoint_interval} > {checkpoint_name}/latest_checkpointed_iteration.txt"
+            cmd = shlex.split(f"echo {checkpoint_interval} > {checkpoint_name}/latest_checkpointed_iteration.txt")
             print(f"{self.id()} running cmd: {cmd}")
-            subprocess.run(cmd, shell=True, check=False, executable='/bin/bash')
+            subprocess.run(cmd, check=False, executable='/bin/bash')
         except:
             print(f"{self.id()} Failed to update the checkpoint iteration file")
             return False
@@ -504,8 +507,8 @@ class GPT2CheckpointTestCase(BaseTestCase):
 
         # remove previous test log
         try:
-            cmd = f"rm {test_file}"
-            subprocess.run(cmd, shell=True, check=False, executable='/bin/bash')
+            cmd = shlex.split(f"rm {test_file}")
+            subprocess.run(cmd, check=False, executable='/bin/bash')
         except:
             print(f"{self.id()} no previous logs for")
         self.run_gpt2_test(test_config, test_file)
@@ -545,24 +548,20 @@ def checkpoint_suite():
     # Shrink DP
     suite.addTest(GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu1_node1_with_zero1'))
     suite.addTest(GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu1_node1_with_zero2'))
-    suite.addTest(
-        GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu1_node1_with_zero2_offload'))
+    suite.addTest(GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu1_node1_with_zero2_offload'))
 
     suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu4_load_gpu2_node1_with_zero1'))
     suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu4_load_gpu2_node1_with_zero2'))
-    suite.addTest(
-        GPT2CheckpointTestCase('test_mp2_gpu4_load_gpu2_node1_with_zero2_offload'))
+    suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu4_load_gpu2_node1_with_zero2_offload'))
 
     # Expand DP
     suite.addTest(GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu4_node1_with_zero1'))
     suite.addTest(GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu4_node1_with_zero2'))
-    suite.addTest(
-        GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu4_node1_with_zero2_offload'))
+    suite.addTest(GPT2CheckpointTestCase('test_mp1_gpu2_load_gpu4_node1_with_zero2_offload'))
 
     suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu2_load_gpu4_node1_with_zero1'))
     suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu2_load_gpu4_node1_with_zero2'))
-    suite.addTest(
-        GPT2CheckpointTestCase('test_mp2_gpu2_load_gpu4_node1_with_zero2_offload'))
+    suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu2_load_gpu4_node1_with_zero2_offload'))
 
     suite.addTest(GPT2CheckpointTestCase('test_mp2_gpu4_node1_without_zero'))
 
